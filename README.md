@@ -18,13 +18,17 @@ we need from MKS responses to Cura requests.
 - M992 elapsed print time (when printing)
 - M27 job completion in percent
 - M105 temperature report
+## commands that Cura uses, in addition to M997, M994, M992, M27, M105
+- M20 file list
+- M23 select file from SD card
+- M24 start or resume SD print
+- M27 report SD print status
 
 ## commands that should be interesting
 - M114 current position - didn't work in my tests?
+- M25 pause SD print
 
 ## important commands to take notice of
-- M28 - file upload - basically, all other commands after it are being put into file, and we wouldn't be getting good responses to them
-- M29 finish file upload
 
 # MQTT
 Topic list TBD
@@ -49,6 +53,24 @@ TBD:
 ## notes to self - planned automations
 - job end notification (simple) - just fire when idle after printing
 - wait for bed cooldown after job
+
+# Tests
+## v0.1 test
+Tests for printer and Cura interaction suggests, that 8080 is for G-code, and 80 is for file upload. And Cura doesn't have port configuration, so it's all or nothing deal.
+Thus we need to emulate both, either as two part proxy, or through Nginx reverse proxy (or some other reverse proxy). Another option is using DNAT.
+
+Otherwise, Cura happily connects through proxy for pronter control, and when additional 80 proxy is brought online, it uploads and start print job.
+
+On the other hand, it means that all commands on main channel (port 8080) are live (and not a part of a file being uploaded), so we can simplify their analysis without creating 
+"file being uploaded, ignore all commands except upload end" flag.
+
+On connection Cura requests file list (M20).
+
+While idle, Cura spams M105 and M997.
+
+After uploading file, it sends M23 filename, M24, M20.
+
+While printing, it spams M105, M997, M994, M992, M27.
 
 # Existing projects
 https://github.com/Blooof/Mks2MqttReporter 
