@@ -7,7 +7,7 @@ import sys
 buffer_size = 4096
 delay = 0.0001
 printer_mks = ('192.168.231.25', 8080)
-
+update_interval = 5 # interval between updates
 
 curExtruder0Temp = 0
 tgtExtruder0Temp = 0
@@ -16,13 +16,14 @@ tgtExtruder1Temp = 0
 curBedTemp = 0
 tgtBedTemp = 0
 progress = 0
-current_file = "" # M994
+current_file = {} # M994 name and size
 file_loaded = False
-printer_status = "idle" # also "printing"
+printer_status = "idle" # also "printing" (even when paused)
 firmware = None #M115 request
-print_status = "idle" #(idle/started/paused/aborted/finished) (how we get aborted?..)
+print_status = "IDLE" # directly from M997 IDLE/PRINTING/PAUSE
+#(idle/started/paused/aborted/finished) (how we get aborted?..)
 
-#elapsedPrintTime (hh:mm:ss)
+printing_time = '00:00:00' #elapsedPrintTime (hh:mm:ss)
 
 
 updated = {}
@@ -30,6 +31,7 @@ updated['M997'] = 0 #(print status, cacheable, 5s)
 updated['M105'] = 0 #(temperature, cacheable, 5s) also M991
 updated['M27'] = 0 #(print progress, cacheable, 5s)
 updated['M992'] = 0 #(elapsed print time, cacheable, 5s?)
+updated['M994'] = 0 #(current printed file, cacheable for all print time...)
 
 
 class TheServer:
@@ -38,6 +40,7 @@ class TheServer:
     printer_list = []
     prcon_time = 0
     prcon_state = 'offline' # also 'online' and 'transfer'
+    update_status = 1 # 0 - update in progress, timestamp - time of last successful update, 1 - starting value
 
     def __init__(self, host, port):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -59,11 +62,16 @@ class TheServer:
     def main_loop(self):
         self.server_list.append(self.server)
         while 1:
-	    if self.prcon_state == 'offline' and time.time() > self.prcon_time:
+	    self.ts = time.time()
+	    if self.prcon_state == 'offline' and self.ts > self.prcon_time:
 		self.printer_connect(30)
-            time.sleep(delay)
+	    if self.prcon_state == 'online' and self.ts > self.update_status > 0:
+		self.printer_update()
+	    if self.prcon_state == 'online' and self.update_status == 0:
+		self.check_update()
+
             ss = select.select
-            inputready, outputready, exceptready = ss(self.server_list + self.client_list, [], [], 5)
+            inputready, outputready, exceptready = ss(self.server_list + self.client_list, [], [], delay) # with timeout
             for self.s in inputready:
                 if self.s == self.server:
                     self.on_client_accept()
@@ -75,7 +83,7 @@ class TheServer:
                 else:
                     self.on_client_recv()
 	    if self.prcon_state != 'offline':
-        	inputready, outputready, exceptready = ss(self.printer_list, [], [], 0.1)
+        	inputready, outputready, exceptready = ss(self.printer_list, [], [], delay) # with timeout
         	for self.s in inputready:
 		    self.data = self.s.recv(buffer_size)
 		    if len(self.data) == 0:
@@ -83,6 +91,7 @@ class TheServer:
                 	break
 		    else:
                 	self.on_printer_recv()
+	    time.sleep(delay)
 
     def on_client_accept(self):
         clientsock, clientaddr = self.server.accept()
@@ -106,15 +115,16 @@ class TheServer:
     def on_client_recv(self):
         data = self.data
 	peer = self.s.getpeername()
-	#parse_data(data)
-	#FIXME parse client command
-        #print peer, ">>", data
+	cmd = self.parse_request(data)
+	if cmd == '':
+	    return
+        print peer, ">>", cmd
 	if self.prcon_state == 'online':
 	    self.printer_list[0].send(data)
 	    return
 	if self.prcon_state == 'transfer':
 	    #silently drop input while filelist transfer is happening
-	    pass
+	    return
 	if self.prcon_state == 'offline':
 	    self.s.send('failed\r\n')
 
@@ -127,8 +137,57 @@ class TheServer:
 	for client in self.client_list:
 	    client.send(data)
 
-    def parse_response(self,data):
+    def printer_update(self):
+	global updated, printer_status
+	updated['M105'] = 0
+	updated['M992'] = 0
+	updated['M994'] = 0
+	updated['M997'] = 0
+	updated['M27'] = 0
+	self.update_status = 0
+	if printer_status == 'idle':
+	    cmd = "M997\r\nM105\r\n"
+	else:
+	    #FIXME request file only once?
+	    cmd = "M997\r\nM105\r\nM27\r\nM992\r\nM994\r\n"
+	try:
+	    self.printer_list[0].send(cmd)
+	except Exception, e:
+	    print e
+	    self.on_printer_close()
+
+    def check_update(self):
+	global updated, printer_status, update_interval
+	if printer_status == 'idle' and updated['M105'] > 0 and updated['M997'] > 0:
+	    self.update_status = self.ts + update_interval
+	if printer_status == 'printing' and updated['M105'] > 0 and updated['M997'] > 0 and updated['M992'] > 0 and updated['M27'] > 0 and updated['M994'] > 0:
+	    self.update_status = self.ts + update_interval
+	
+
+    def parse_request(self,data):
 	global curExtruder0Temp,tgtExtruder0Temp,curExtruder1Temp,tgtExtruder1Temp,curBedTemp,tgtBedTemp,progress,current_file,file_loaded,printer_status,firmware,print_status,updated
+	unparsed = []
+	for s in data.splitlines():
+	    if s == "M105":
+		self.s.send("ok\r\nT:{0} /{1} B:{2} /{3} T0:{0} /{1} T1:{4} /{5} @:0 B@:0\r\n".format(int(curExtruder0Temp), int(tgtExtruder0Temp), int(curBedTemp), int(tgtBedTemp), int(curExtruder1Temp), int(tgtExtruder1Temp)))
+		continue
+	    if s == "M997":
+		self.s.send("ok\r\nM997 {}\r\n".format(print_status))
+		continue
+	    if s == "M994":
+		self.s.send("ok\r\nM994 1:/{};{}\r\n".format(current_file.name, current_file.size))
+		continue
+	    if s == "M992":
+		self.s.send("ok\r\nM992 {}\r\n".format(printing_time))
+		continue
+	    if s == "M27":
+		self.s.send("ok\r\nM27 {}\r\n".format(int(progress)))
+		continue
+	    unparsed.append(s) 
+	return "\r\n".join(unparsed)
+
+    def parse_response(self,data):
+	global curExtruder0Temp,tgtExtruder0Temp,curExtruder1Temp,tgtExtruder1Temp,curBedTemp,tgtBedTemp,progress,current_file,file_loaded,printer_status,firmware,print_status,printing_time,updated
 	for s in data.splitlines():
 	    if self.prcon_state == 'online' and 'Begin file list' in s:
 		self.prcon_state = 'transfer'
@@ -147,7 +206,7 @@ class TheServer:
 		curBedTemp = float(bed_temp[0:bed_temp.find("/")])
 		tgtBedTemp = float(bed_temp[bed_temp.find("/") + 1:len(bed_temp)])
 		print "T:", curExtruder0Temp, " B:",curBedTemp
-		updated['M105'] = time.time()
+		updated['M105'] = self.ts
 		continue
 	    if self.prcon_state == 'online' and s.startswith("M997 "):
         	if "IDLE" in s:
@@ -155,19 +214,22 @@ class TheServer:
 			# We finished (or aborted)
 			pass
 		    printer_status = 'idle'
-		    print_status = 'idle' 
+		    print_status = 'IDLE' 
 		    updated['M997'] = time.time()
         	elif "PRINTING" in s:
 		    printer_status = 'printing'
-		    print_status = 'started'
+		    print_status = 'PRINTING'
 		    updated['M997'] = time.time()
         	elif "PAUSE" in s:
 		    printer_status = 'printing'
-		    print_status = 'paused'
+		    print_status = 'PAUSE'
 		    updated['M997'] = time.time()
         	continue
 	    if self.prcon_state == 'online' and s.startswith("M994 ") and s.rfind("/") != -1:
-    		current_file = s[s.rfind("/") + 1:s.rfind(";")]
+    		current_file.name = s[s.rfind("/") + 1:s.rfind(";")]
+		current_file.size = s[s.rfind(";") + 1:]
+		# M994 1:/esp32cam_print1.gcode;-788190462
+		# it looks like decoding uint as int... Oh well, it doesn't matter anyway, we can't use it meaningfully
         	continue
 	    if self.prcon_state == 'online' and s.startswith("M27 "):
 		progress = float(s[s.find("M27") + len("M27"):len(s)].replace(" ", ""))
@@ -176,6 +238,7 @@ class TheServer:
 	    if self.prcon_state == 'online' and s.startswith("M992 "):
         	tm = s[s.find("M992") + len("M992"):len(s)].replace(" ", "")
         	mms = tm.split(":")
+		printing_time = tm
     		#printing_time = int(mms[0]) * 3600 + int(mms[1]) * 60 + int(mms[2])
 		updated['M992'] = time.time()
 		continue

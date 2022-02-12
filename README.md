@@ -189,9 +189,9 @@ Initial proxy.py code imported from https://voorloopnul.com/blog/a-python-proxy-
 - v0.1 import proxy.py as a start, test with printer and Cura, record all interactions
 - v0.2 add first (imperfect) parsing of responses.
 - v0.3 decouple client and printer connections - make printer connection independent
+- v0.4 add scheduled commands (when no client is connected, check on printer anyway). Also, fake partial printer presence for clients even when printer offline
 
 # planned "milestones"
-- v0.4 add scheduled commands (when no client is connected, check on printer anyway)
 - v0.41 add modes - standalone/proxy8080
 - v0.5 parse cmd/send response based on cached data
 - v0.40 add mqtt reporting
