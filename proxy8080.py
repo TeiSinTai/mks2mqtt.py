@@ -16,7 +16,7 @@ tgtExtruder1Temp = 0
 curBedTemp = 0
 tgtBedTemp = 0
 progress = 0
-current_file = {} # M994 name and size
+current_file = {'name': '', 'size':0} # M994 name and size
 file_loaded = False
 printer_status = "idle" # also "printing" (even when paused)
 firmware = None #M115 request
@@ -131,9 +131,11 @@ class TheServer:
     def on_printer_recv(self):
         data = self.data
 	peer = self.s.getpeername()
+	if self.prcon_state == 'transfer':
+	    #print peer, ">>", data
+	    pass
 	self.parse_response(data)
 	#FIXME parse client command
-        #print peer, ">>", data
 	for client in self.client_list:
 	    client.send(data)
 
@@ -162,6 +164,9 @@ class TheServer:
 	    self.update_status = self.ts + update_interval
 	if printer_status == 'printing' and updated['M105'] > 0 and updated['M997'] > 0 and updated['M992'] > 0 and updated['M27'] > 0 and updated['M994'] > 0:
 	    self.update_status = self.ts + update_interval
+	if printer_status == 'printing':
+	    #print "Update check {} M105:{} M997:{} M992:{} M27:{} M994:{}".format(self.update_status,updated['M105'],updated['M997'],updated['M992'],updated['M27'],updated['M994'])
+	    pass
 	
 
     def parse_request(self,data):
@@ -175,7 +180,7 @@ class TheServer:
 		self.s.send("ok\r\nM997 {}\r\n".format(print_status))
 		continue
 	    if s == "M994":
-		self.s.send("ok\r\nM994 1:/{};{}\r\n".format(current_file.name, current_file.size))
+		self.s.send("ok\r\nM994 1:/{};{}\r\n".format(current_file['name'], current_file['size']))
 		continue
 	    if s == "M992":
 		self.s.send("ok\r\nM992 {}\r\n".format(printing_time))
@@ -183,6 +188,9 @@ class TheServer:
 	    if s == "M27":
 		self.s.send("ok\r\nM27 {}\r\n".format(int(progress)))
 		continue
+	    if s.startswith("M23"):
+		current_file['name'] = s[s.find("M23") + len("M23"):len(s)].replace(" ", "")
+		#get selected filename directly from select command of client. 
 	    unparsed.append(s) 
 	return "\r\n".join(unparsed)
 
@@ -192,7 +200,7 @@ class TheServer:
 	    if self.prcon_state == 'online' and 'Begin file list' in s:
 		self.prcon_state = 'transfer'
 		continue
-	    if self.prcon_state == 'transfer' and 'End file list' in s:
+	    if 'End file list' in s:
 		self.prcon_state = 'online'
 		continue
 	    if self.prcon_state == 'online' and "T" in s and "B" in s and "T0" in s:
@@ -212,11 +220,20 @@ class TheServer:
         	if "IDLE" in s:
 		    if printer_status == 'printing':
 			# We finished (or aborted)
-			pass
+			print "Finished printing {}".format(current_file['name'])
 		    printer_status = 'idle'
 		    print_status = 'IDLE' 
 		    updated['M997'] = time.time()
         	elif "PRINTING" in s:
+		    if printer_status == 'idle':
+			# Started print. We use filename from M23 (probably), and fill progress and time elapsed from defaults
+			# also, we must set updated[] for M27, M994 and M992 - because we didn't ask for them, but check_update() now think that we did.
+			print "Started printing {}".format(current_file['name'])
+			updated['M27'] = time.time()
+			updated['M994'] = time.time()
+			updated['M992'] = time.time()
+			progress = 0
+			printing_time = '00:00:00'
 		    printer_status = 'printing'
 		    print_status = 'PRINTING'
 		    updated['M997'] = time.time()
@@ -226,10 +243,11 @@ class TheServer:
 		    updated['M997'] = time.time()
         	continue
 	    if self.prcon_state == 'online' and s.startswith("M994 ") and s.rfind("/") != -1:
-    		current_file.name = s[s.rfind("/") + 1:s.rfind(";")]
-		current_file.size = s[s.rfind(";") + 1:]
+    		current_file['name'] = s[s.rfind("/") + 1:s.rfind(";")]
+		current_file['size'] = s[s.rfind(";") + 1:]
 		# M994 1:/esp32cam_print1.gcode;-788190462
 		# it looks like decoding uint as int... Oh well, it doesn't matter anyway, we can't use it meaningfully
+		updated['M994'] = time.time()
         	continue
 	    if self.prcon_state == 'online' and s.startswith("M27 "):
 		progress = float(s[s.find("M27") + len("M27"):len(s)].replace(" ", ""))
@@ -242,6 +260,11 @@ class TheServer:
     		#printing_time = int(mms[0]) * 3600 + int(mms[1]) * 60 + int(mms[2])
 		updated['M992'] = time.time()
 		continue
+	    if s == 'ok':
+		continue
+	    if s == 'File selected':
+		continue
+	    print "<<<",s
 
 if __name__ == '__main__':
         server = TheServer('', 8080)
