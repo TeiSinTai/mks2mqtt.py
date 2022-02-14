@@ -1,8 +1,11 @@
-#!/usr/bin/python
+# -*- coding: utf-8 -*-
+from __future__ import print_function
 import socket
 import select
 import time
 import sys
+
+
 
 buffer_size = 4096
 delay = 0.0001
@@ -55,8 +58,10 @@ class TheServer:
             self.printer_list.append(self.printer)
 	    self.prcon_time = 0
 	    self.prcon_state = 'online'
+	    print("Printer online")
         except Exception, e:
-            print e
+            print(e)
+	    #FIXME only print when first error
 	    self.prcon_time = time.time() + reconnect_time
 
     def main_loop(self):
@@ -95,11 +100,11 @@ class TheServer:
 
     def on_client_accept(self):
         clientsock, clientaddr = self.server.accept()
-        print clientaddr, "has connected"
+        print(clientaddr, "has connected")
         self.client_list.append(clientsock)
 
     def on_client_close(self):
-        print self.s.getpeername(), "has disconnected"
+        print(self.s.getpeername(), "has disconnected")
         #remove objects from client_list
         self.client_list.remove(self.s)
 	self.s.close()
@@ -110,6 +115,7 @@ class TheServer:
 	#close socket
 	self.s.close()
 	#FIXME add disconnect feedback
+	print("Printer offline")
 	self.prcon_state = 'offline'
 
     def on_client_recv(self):
@@ -118,7 +124,7 @@ class TheServer:
 	cmd = self.parse_request(data)
 	if cmd == '':
 	    return
-        print peer, ">>", cmd
+        print(peer, ">>", cmd)
 	if self.prcon_state == 'online':
 	    self.printer_list[0].send(data)
 	    return
@@ -131,11 +137,7 @@ class TheServer:
     def on_printer_recv(self):
         data = self.data
 	peer = self.s.getpeername()
-	if self.prcon_state == 'transfer':
-	    #print peer, ">>", data
-	    pass
 	self.parse_response(data)
-	#FIXME parse client command
 	for client in self.client_list:
 	    client.send(data)
 
@@ -155,7 +157,7 @@ class TheServer:
 	try:
 	    self.printer_list[0].send(cmd)
 	except Exception, e:
-	    print e
+	    print(e)
 	    self.on_printer_close()
 
     def check_update(self):
@@ -164,10 +166,6 @@ class TheServer:
 	    self.update_status = self.ts + update_interval
 	if printer_status == 'printing' and updated['M105'] > 0 and updated['M997'] > 0 and updated['M992'] > 0 and updated['M27'] > 0 and updated['M994'] > 0:
 	    self.update_status = self.ts + update_interval
-	if printer_status == 'printing':
-	    #print "Update check {} M105:{} M997:{} M992:{} M27:{} M994:{}".format(self.update_status,updated['M105'],updated['M997'],updated['M992'],updated['M27'],updated['M994'])
-	    pass
-	
 
     def parse_request(self,data):
 	global curExtruder0Temp,tgtExtruder0Temp,curExtruder1Temp,tgtExtruder1Temp,curBedTemp,tgtBedTemp,progress,current_file,file_loaded,printer_status,firmware,print_status,updated
@@ -213,14 +211,14 @@ class TheServer:
 		tgtExtruder1Temp = float(t1_temp[t1_temp.find("/") + 1:len(t1_temp)])
 		curBedTemp = float(bed_temp[0:bed_temp.find("/")])
 		tgtBedTemp = float(bed_temp[bed_temp.find("/") + 1:len(bed_temp)])
-		print "T:", curExtruder0Temp, " B:",curBedTemp
+		print("T:", curExtruder0Temp, " B:",curBedTemp)
 		updated['M105'] = self.ts
 		continue
 	    if self.prcon_state == 'online' and s.startswith("M997 "):
         	if "IDLE" in s:
 		    if printer_status == 'printing':
 			# We finished (or aborted)
-			print "Finished printing {}".format(current_file['name'])
+			print("Finished printing {}".format(current_file['name']))
 		    printer_status = 'idle'
 		    print_status = 'IDLE' 
 		    updated['M997'] = time.time()
@@ -228,7 +226,7 @@ class TheServer:
 		    if printer_status == 'idle':
 			# Started print. We use filename from M23 (probably), and fill progress and time elapsed from defaults
 			# also, we must set updated[] for M27, M994 and M992 - because we didn't ask for them, but check_update() now think that we did.
-			print "Started printing {}".format(current_file['name'])
+			print("Started printing {}".format(current_file['name']))
 			updated['M27'] = time.time()
 			updated['M994'] = time.time()
 			updated['M992'] = time.time()
@@ -264,12 +262,12 @@ class TheServer:
 		continue
 	    if s == 'File selected':
 		continue
-	    print "<<<",s
+	    print("<<<",s)
 
 if __name__ == '__main__':
         server = TheServer('', 8080)
         try:
             server.main_loop()
         except KeyboardInterrupt:
-            print "Ctrl C - Stopping server"
+            print("Ctrl C - Stopping server")
             sys.exit(1)
