@@ -207,9 +207,9 @@ Initial proxy.py code imported from https://voorloopnul.com/blog/a-python-proxy-
 - v0.4.1 parse cmd/send response based on cached data. Testing and clearing some bugs...
 - v0.4.2 switching to print function (python3 compatible)
 - v0.5 add mqtt reporting, also move to python3
+- v0.5.1 add mqtt discovery for HA
 
 # planned "milestones"
-- v0.5.1 add mqtt discovery for HA
 - v0.6 add modes - standalone/proxy8080
 - v0.7 add MQTT suscribe and sending commands on MQTT input
 - v0.8 add command line switches instead of constants (printer address, mode, mqtt server)

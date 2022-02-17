@@ -25,6 +25,7 @@ progress = 0
 current_file = {'name': '', 'size':0} # M994 name and size
 file_loaded = False
 printer_status = "idle" # also "printing" (even when paused)
+printer_paused = False 
 firmware = None #M115 request
 print_status = "IDLE" # directly from M997 IDLE/PRINTING/PAUSE
 #(idle/started/paused/aborted/finished) (how we get aborted?..)
@@ -122,11 +123,13 @@ class TheServer:
         clientsock, clientaddr = self.server.accept()
         print(clientaddr, "has connected")
         self.mqtt_publish("event","client {} connected".format(clientaddr))
+        self.mqtt_publish("event","client connected")
         self.client_list.append(clientsock)
 
     def on_client_close(self):
         print(self.s.getpeername(), "has disconnected")
         self.mqtt_publish("event","client {} disconnected".format(self.s.getpeername()))
+        self.mqtt_publish("event","client disconnected")
         #remove objects from client_list
         self.client_list.remove(self.s)
         self.s.close()
@@ -136,7 +139,6 @@ class TheServer:
         self.printer_list.remove(self.s)
         #close socket
         self.s.close()
-        #FIXME add disconnect feedback
         self.mqtt_publish("prcon_status","offline")
         self.mqtt_publish("event","printer is now offline")
         print("Printer offline")
@@ -215,11 +217,12 @@ class TheServer:
                 #get selected filename directly from select command of client. 
                 current_file['name'] = s[s.find("M23") + len("M23"):len(s)].replace(" ", "")
                 self.mqtt_publish("current_file",current_file['name'])
+                file_loaded = True
             unparsed.add(s) 
         return "\r\n".join(unparsed)
 
     def parse_response(self,data):
-        global curExtruder0Temp,tgtExtruder0Temp,curExtruder1Temp,tgtExtruder1Temp,curBedTemp,tgtBedTemp,progress,current_file,file_loaded,printer_status,firmware,print_status,printing_time,updated
+        global curExtruder0Temp,tgtExtruder0Temp,curExtruder1Temp,tgtExtruder1Temp,curBedTemp,tgtBedTemp,progress,current_file,file_loaded,printer_status,firmware,print_status,printing_time,updated,printer_paused
         for s in data.decode("ascii").splitlines():
             #if self.prcon_state == 'online' and 'Begin file list' in s:
             #    self.prcon_state = 'transfer'
@@ -254,8 +257,10 @@ class TheServer:
                         print("Finished printing {}".format(current_file['name']))
                         progress = 0
                         printing_time = '00:00:00'
+                        file_loaded = False
                     self.mqtt_publish("printer_status","idle")
                     self.mqtt_publish("print_status","IDLE")
+                    self.mqtt_publish("printer_paused","false")
                     printer_status = 'idle'
                     print_status = 'IDLE' 
                     updated['M997'] = time.time()
@@ -270,16 +275,22 @@ class TheServer:
                         updated['M992'] = time.time()
                         progress = 0
                         printing_time = '00:00:00'
-                    #FIXME detect pause end
+                    if printer_paused:
+                        printer_paused = False
+                        self.mqtt_publish("event","Print resumed")
+                        self.mqtt_publish("printer_paused","false")
                     self.mqtt_publish("printer_status","printing")
                     self.mqtt_publish("print_status","PRINTING")
                     printer_status = 'printing'
                     print_status = 'PRINTING'
                     updated['M997'] = time.time()
                 elif "PAUSE" in s:
+                    printer_paused = True
                     #FIXME detect pause start
                     self.mqtt_publish("printer_status","printing")
                     self.mqtt_publish("print_status","PAUSE")
+                    self.mqtt_publish("event","Print paused")
+                    self.mqtt_publish("printer_paused","true")
                     printer_status = 'printing'
                     print_status = 'PAUSE'
                     updated['M997'] = time.time()
