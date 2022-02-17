@@ -55,21 +55,35 @@ FIXME there are more, in Cura interface there are buttons for motor control (hom
 - M997 request (print status, cacheable, 5s)
 
 # MQTT
-Topic list
+Base topic set to mksmqtt/__printer_ip__/
+
+## Topic list
+- prcon_status (online, offline) - status of printer connection
+- event 
+- current_file
+- current_file_size
 - curExtruder0Temp
 - tgtExtruder0Temp
 - curExtruder1Temp (when available, i.e. non-zero)
 - tgtExtruder1Temp (when curExtruder1Temp non-zero)
 - curBedTemp
 - tgtBedTemp
-- elapsedPrintTime (hh:mm:ss)
-- progress (%)
-- file (or "")
-- file_loaded (yes/no)
-- printer_status (idle/running)
-- firmware
-- print_status (idle/started/paused/aborted/finished) (how we get aborted?..)
+- printer_status ("idle", "printing")
+- print_status ("IDLE", "PRINTING", "PAUSE")
+- progress
+- printing_time
 
+## Event (.../event) list
+- "printer is now online"
+- "printer is now offline"
+- "client __client_IP__ connected"
+- "client __client_ip__ disconnected"
+- "Finished printing"
+- "Started printing __filename__"
+
+## Not implemented (yet)
+- file_loaded (yes/no)
+- firmware
 
 # Home assistant
 I want this to work with Home Assistant, so I plan to include HA MQTT discovery - basically, some MQTT JSON publishes that tie other MQTT topics into HA.
