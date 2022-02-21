@@ -1,6 +1,8 @@
 # mks2mqtt.py
 MKS (3D printer WiFi add-on) to MQTT translator, with included socket proxy
 
+Working version achieved at 0.5.2.
+
 # Initial ideas and info
 All my tests are done with Flying Bear Reborn.
 
@@ -208,8 +210,10 @@ Initial proxy.py code imported from https://voorloopnul.com/blog/a-python-proxy-
 - v0.4.2 switching to print function (python3 compatible)
 - v0.5 add mqtt reporting, also move to python3
 - v0.5.1 add mqtt discovery for HA
+- v0.5.2 fixed printing_time representation, improved stability
 
 # planned "milestones"
 - v0.6 add modes - standalone/proxy8080
+- v0.6.1 merge with proxy80
 - v0.7 add MQTT suscribe and sending commands on MQTT input
-- v0.8 add command line switches instead of constants (printer address, mode, mqtt server)
+- v0.8 add command line switches instead of constants (printer address, mode, mqtt server), or even config file

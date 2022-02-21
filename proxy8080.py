@@ -32,24 +32,16 @@ print_status = "IDLE" # directly from M997 IDLE/PRINTING/PAUSE
 
 printing_time = '00:00:00' #elapsedPrintTime (hh:mm:ss)
 
-
-updated = {}
-updated['M997'] = 0 #(print status, cacheable, 5s)
-updated['M105'] = 0 #(temperature, cacheable, 5s) also M991
-updated['M27'] = 0 #(print progress, cacheable, 5s)
-updated['M992'] = 0 #(elapsed print time, cacheable, 5s?)
-updated['M994'] = 0 #(current printed file, cacheable for all print time...)
-
-
 class TheServer:
     server_list = []
     client_list = []
     printer_list = []
     prcon_time = 0
-    prcon_state = 'offline' # also 'online' and 'transfer'
+    prcon_state = 'offline' # also 'online' 
     update_status = 1 # 0 - update in progress, timestamp - time of last successful update, 1 - starting value
 
     def __init__(self, host, port):
+        socket.setdefaulttimeout(0.1)
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind((host, port))
@@ -77,11 +69,9 @@ class TheServer:
             self.ts = time.time()
             if self.prcon_state == 'offline' and self.ts > self.prcon_time:
                 self.printer_connect(30)
-            if self.prcon_state == 'online' and self.ts > self.update_status > 0:
+            if self.prcon_state == 'online' and self.ts > self.update_status and self.update_status > 0:
                 self.printer_update()
-            if self.prcon_state == 'online' and self.update_status == 0:
-                self.check_update()
-
+    
             ss = select.select
             inputready, outputready, exceptready = ss(self.server_list + self.client_list, [], [], delay) # with timeout
             for self.s in inputready:
@@ -106,13 +96,12 @@ class TheServer:
                 for self.s in inputready:
                     try:
                         self.data = self.s.recv(buffer_size)
-                    except ConnectionResetError:
-                        self.on_printer_close()
-                        break
-                    except OSError:
+                    except Exception as e:
+                        print(e)
                         self.on_printer_close()
                         break
                     if len(self.data) == 0:
+                        print("Zero printer response")
                         self.on_printer_close()
                         break
                     else:
@@ -143,6 +132,7 @@ class TheServer:
         self.mqtt_publish("event","printer is now offline")
         print("Printer offline")
         self.prcon_state = 'offline'
+        self.prcon_time = self.ts + delay
 
     def on_client_recv(self):
         data = self.data
@@ -158,6 +148,7 @@ class TheServer:
         #    #silently drop input while filelist transfer is happening
         #    return
         if self.prcon_state == 'offline':
+            print("Client cmd failed.")
             self.s.send(b'failed\r\n')
 
     def on_printer_recv(self):
@@ -168,35 +159,24 @@ class TheServer:
             client.send(data)
 
     def printer_update(self):
-        global updated, printer_status
-        updated['M105'] = 0
-        updated['M992'] = 0
-        updated['M994'] = 0
-        updated['M997'] = 0
-        updated['M27'] = 0
-        self.update_status = 0
-        if printer_status == 'idle':
-            cmd = b"M997\r\nM105\r\n"
-        else:
-            #FIXME request file only once?
-            cmd = b"M997\r\nM105\r\nM27\r\nM992\r\nM994\r\n"
+        cmd = b"M997\r\nM105\r\n"
         try:
-            self.printer_list[0].send(cmd)
+            self.printer_list[0].sendall(cmd)
+            if printer_status == 'printing':
+                cmd2 = b"M27\r\nM992\r\n"
+                self.printer_list[0].sendall(cmd2)
+                if current_file['size'] == 0:
+                    cmd3 = b"M994\r\n"
+                    self.printer_list[0].sendall(cmd2)
+            self.update_status = self.ts + update_interval
         except Exception as e:
             print(e)
             self.on_printer_close()
 
-    def check_update(self):
-        global updated, printer_status, update_interval
-        #if printer_status == 'idle' and updated['M105'] > 0 and updated['M997'] > 0:
-        if updated['M105'] > 0 and updated['M997'] > 0:
-            self.update_status = self.ts + update_interval
-        #if printer_status == 'printing' and updated['M105'] > 0 and updated['M997'] > 0 and updated['M992'] > 0 and updated['M27'] > 0 and updated['M994'] > 0:
-        #    self.update_status = self.ts + update_interval
-
     def parse_request(self,data):
-        global curExtruder0Temp,tgtExtruder0Temp,curExtruder1Temp,tgtExtruder1Temp,curBedTemp,tgtBedTemp,progress,current_file,file_loaded,printer_status,firmware,print_status,updated
-        unparsed = set()
+        global curExtruder0Temp,tgtExtruder0Temp,curExtruder1Temp,tgtExtruder1Temp,curBedTemp,tgtBedTemp,progress,current_file,file_loaded,printer_status,firmware,print_status
+        unparsed = list()
+        cmdset = set()
         for s in data.decode("ascii").splitlines():
             if s == "M105":
                 self.s.send("ok\r\nT:{0} /{1} B:{2} /{3} T0:{0} /{1} T1:{4} /{5} @:0 B@:0\r\n".format(int(curExtruder0Temp), int(tgtExtruder0Temp), int(curBedTemp), int(tgtBedTemp), int(curExtruder1Temp), int(tgtExtruder1Temp)).encode("ascii"))
@@ -218,11 +198,13 @@ class TheServer:
                 current_file['name'] = s[s.find("M23") + len("M23"):len(s)].replace(" ", "")
                 self.mqtt_publish("current_file",current_file['name'])
                 file_loaded = True
-            unparsed.add(s) 
+            if s not in cmdset:
+                unparsed.append(s) 
+                cmdset.add(s)
         return "\r\n".join(unparsed)
 
     def parse_response(self,data):
-        global curExtruder0Temp,tgtExtruder0Temp,curExtruder1Temp,tgtExtruder1Temp,curBedTemp,tgtBedTemp,progress,current_file,file_loaded,printer_status,firmware,print_status,printing_time,updated,printer_paused
+        global curExtruder0Temp,tgtExtruder0Temp,curExtruder1Temp,tgtExtruder1Temp,curBedTemp,tgtBedTemp,progress,current_file,file_loaded,printer_status,firmware,print_status,printing_time,printer_paused
         for s in data.decode("ascii").splitlines():
             #if self.prcon_state == 'online' and 'Begin file list' in s:
             #    self.prcon_state = 'transfer'
@@ -241,7 +223,6 @@ class TheServer:
                 curBedTemp = float(bed_temp[0:bed_temp.find("/")])
                 tgtBedTemp = float(bed_temp[bed_temp.find("/") + 1:len(bed_temp)])
                 print("T:", curExtruder0Temp, " B:",curBedTemp)
-                updated['M105'] = self.ts
                 self.mqtt_publish("curExtruder0Temp",curExtruder0Temp)
                 self.mqtt_publish("curExtruder1Temp",curExtruder1Temp)
                 self.mqtt_publish("tgtExtruder0Temp",tgtExtruder0Temp)
@@ -255,7 +236,8 @@ class TheServer:
                         # We finished (or aborted)
                         self.mqtt_publish("event","Finished printing")
                         print("Finished printing {}".format(current_file['name']))
-                        progress = 0
+                        progress = 100
+                        self.mqtt_publish("progress",progress)
                         printing_time = '00:00:00'
                         file_loaded = False
                     self.mqtt_publish("printer_status","idle")
@@ -263,16 +245,11 @@ class TheServer:
                     self.mqtt_publish("printer_paused","false")
                     printer_status = 'idle'
                     print_status = 'IDLE' 
-                    updated['M997'] = time.time()
                 elif "PRINTING" in s:
                     if printer_status == 'idle':
                         # Started print. We use filename from M23 (probably), and fill progress and time elapsed from defaults
-                        # also, we must set updated[] for M27, M994 and M992 - because we didn't ask for them, but check_update() now think that we did.
                         print("Started printing {}".format(current_file['name']))
                         self.mqtt_publish("event","Started printing {}".format(current_file['name']))
-                        updated['M27'] = time.time()
-                        updated['M994'] = time.time()
-                        updated['M992'] = time.time()
                         progress = 0
                         printing_time = '00:00:00'
                     if printer_paused:
@@ -283,7 +260,6 @@ class TheServer:
                     self.mqtt_publish("print_status","PRINTING")
                     printer_status = 'printing'
                     print_status = 'PRINTING'
-                    updated['M997'] = time.time()
                 elif "PAUSE" in s:
                     printer_paused = True
                     #FIXME detect pause start
@@ -293,7 +269,6 @@ class TheServer:
                     self.mqtt_publish("printer_paused","true")
                     printer_status = 'printing'
                     print_status = 'PAUSE'
-                    updated['M997'] = time.time()
                 continue
             if self.prcon_state == 'online' and s.startswith("M994 ") and s.rfind("/") != -1:
                 current_file['name'] = s[s.rfind("/") + 1:s.rfind(";")]
@@ -302,11 +277,9 @@ class TheServer:
                 # it looks like decoding uint as int... Oh well, it doesn't matter anyway, we can't use it meaningfully
                 self.mqtt_publish("current_file",current_file['name'])
                 self.mqtt_publish("current_file_size",current_file['size'])
-                updated['M994'] = time.time()
                 continue
             if self.prcon_state == 'online' and s.startswith("M27 "):
                 progress = float(s[s.find("M27") + len("M27"):len(s)].replace(" ", ""))
-                updated['M27'] = time.time()
                 self.mqtt_publish("progress",progress)
                 continue
             if self.prcon_state == 'online' and s.startswith("M992 "):
@@ -315,7 +288,6 @@ class TheServer:
                 printing_time = tm
                 self.mqtt_publish("printing_time",tm)
                 #printing_time = int(mms[0]) * 3600 + int(mms[1]) * 60 + int(mms[2])
-                updated['M992'] = time.time()
                 continue
             if s == 'ok':
                 continue
